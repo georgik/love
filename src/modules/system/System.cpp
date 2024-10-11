@@ -77,6 +77,8 @@ const char *System::getOS()
 	return "Android";
 #elif defined(LOVE_LINUX)
 	return "Linux";
+#elif defined(LOVE_ESP_IDF)
+    return "ESP-IDF";
 #else
 	return "Unknown";
 #endif
@@ -167,6 +169,9 @@ bool System::openURL(const std::string &url) const
 
 	return (ptrdiff_t) result > 32;
 
+#elif defined(LOVE_ESP_IDF)
+
+    return false;
 #endif
 }
 
