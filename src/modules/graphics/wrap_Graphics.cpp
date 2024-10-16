@@ -1768,7 +1768,7 @@ static Buffer::DataDeclaration luax_checkdatadeclaration(lua_State* L, int forma
 		luaL_argerror(L, formattableidx, str.c_str());
 	}
 	else if (!lua_isnoneornil(L, -1))
-		decl.bindingLocation = luaL_checkint(L, -1);
+		decl.bindingLocation = luaL_checkinteger(L, -1);
 	lua_pop(L, 1);
 
 	return decl;
@@ -2212,7 +2212,7 @@ static Mesh::BufferAttribute luax_checkbufferattributetable(lua_State *L, int id
 	lua_pop(L, 1);
 
 	lua_getfield(L, idx, "location");
-	attrib.bindingLocation = luaL_checkint(L, -1);
+	attrib.bindingLocation = luaL_checkinteger(L, -1);
 	lua_pop(L, 1);
 
 	lua_getfield(L, idx, "name");
@@ -2231,7 +2231,7 @@ static Mesh::BufferAttribute luax_checkbufferattributetable(lua_State *L, int id
 
 	lua_getfield(L, idx, "locationinbuffer");
 	if (!lua_isnoneornil(L, -1))
-		attrib.bindingLocationInBuffer = luaL_checkint(L, -1);
+		attrib.bindingLocationInBuffer = luaL_checkinteger(L, -1);
 	else
 		attrib.bindingLocationInBuffer = attrib.bindingLocation;
 	lua_pop(L, 1);

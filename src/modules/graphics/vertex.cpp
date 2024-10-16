@@ -42,6 +42,7 @@ size_t getFormatStride(CommonFormat format)
 	switch (format)
 	{
 		case CommonFormat::NONE: return 0;
+        case CommonFormat::COUNT: return 0;
 		case CommonFormat::XYf: return sizeof(float) * 2;
 		case CommonFormat::XYZf: return sizeof(float) * 3;
 		case CommonFormat::RGBAub: return sizeof(uint8) * 4;
@@ -61,6 +62,8 @@ uint32 getFormatFlags(CommonFormat format)
 	switch (format)
 	{
 	case CommonFormat::NONE:
+		return 0;
+	case CommonFormat::COUNT:
 		return 0;
 	case CommonFormat::XYf:
 	case CommonFormat::XYZf:
@@ -86,6 +89,7 @@ int getFormatPositionComponents(CommonFormat format)
 	switch (format)
 	{
 	case CommonFormat::NONE:
+    case CommonFormat::COUNT:
 	case CommonFormat::RGBAub:
 	case CommonFormat::STf_RGBAub:
 	case CommonFormat::STPf_RGBAub:
@@ -280,6 +284,8 @@ void VertexAttributes::setCommonFormat(CommonFormat format, uint8 bufferindex)
 	switch (format)
 	{
 	case CommonFormat::NONE:
+		break;
+	case CommonFormat::COUNT:
 		break;
 	case CommonFormat::XYf:
 		set(ATTRIB_POS, DATAFORMAT_FLOAT_VEC2, 0, bufferindex);
