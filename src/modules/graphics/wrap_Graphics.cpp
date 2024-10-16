@@ -685,6 +685,8 @@ int w_getStencilState(lua_State *L)
 
 static void parseDPIScale(Data *d, float *dpiscale)
 {
+#ifdef LOVE_ESP_IDF
+#else
 	auto fd = dynamic_cast<love::filesystem::FileData *>(d);
 	if (fd == nullptr)
 		return;
@@ -703,6 +705,7 @@ static void parseDPIScale(Data *d, float *dpiscale)
 		if (end != nullptr && density > 0 && dpiscale != nullptr)
 			*dpiscale = (float) density;
 	}
+#endif
 }
 
 static std::pair<StrongRef<image::ImageData>, StrongRef<image::CompressedImageData>>
@@ -1295,22 +1298,22 @@ int w_newTextureView(lua_State *L)
 
 	lua_getfield(L, 2, "mipmapstart");
 	if (!lua_isnoneornil(L, -1))
-		settings.mipmapStart.set(luaL_checkint(L, -1) - 1);
+		settings.mipmapStart.set(luaL_checkinteger(L, -1) - 1);
 	lua_pop(L, 1);
 
 	lua_getfield(L, 2, "mipmapcount");
 	if (!lua_isnoneornil(L, -1))
-		settings.mipmapCount.set(luaL_checkint(L, -1));
+		settings.mipmapCount.set(luaL_checkinteger(L, -1));
 	lua_pop(L, 1);
 
 	lua_getfield(L, 2, "layerstart");
 	if (!lua_isnoneornil(L, -1))
-		settings.layerStart.set(luaL_checkint(L, -1) - 1);
+		settings.layerStart.set(luaL_checkinteger(L, -1) - 1);
 	lua_pop(L, 1);
 
 	lua_getfield(L, 2, "layers");
 	if (!lua_isnoneornil(L, -1))
-		settings.layerCount.set(luaL_checkint(L, -1));
+		settings.layerCount.set(luaL_checkinteger(L, -1));
 	lua_pop(L, 1);
 
 	lua_getfield(L, 2, "debugname");
