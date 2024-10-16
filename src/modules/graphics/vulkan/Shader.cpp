@@ -201,7 +201,8 @@ void Shader::unloadVolatile()
 		return;
 
 	vgfx->queueCleanUp([shaderModules = std::move(shaderModules), device = device, descriptorSetLayout = descriptorSetLayout, pipelineLayout = pipelineLayout,
-		descriptorPools = descriptorPools, computePipeline = computePipeline, graphicsPipelines = std::move(graphicsPipelines)](){
+		descriptorPools = descriptorPools, computePipeline = computePipeline,
+		graphicsPipelinesCore = std::move(graphicsPipelinesDynamicState), graphicsPipelinesFull = std::move(graphicsPipelinesNoDynamicState)]() {
 		for (const auto &pools : descriptorPools)
 		{
 			for (const auto pool : pools)
@@ -213,7 +214,9 @@ void Shader::unloadVolatile()
 		vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
 		if (computePipeline != VK_NULL_HANDLE)
 			vkDestroyPipeline(device, computePipeline, nullptr);
-		for (const auto& kvp : graphicsPipelines)
+		for (const auto &kvp : graphicsPipelinesCore)
+			vkDestroyPipeline(device, kvp.second, nullptr);
+		for (const auto &kvp : graphicsPipelinesFull)
 			vkDestroyPipeline(device, kvp.second, nullptr);
 	});
 
@@ -334,8 +337,6 @@ void Shader::attach()
 			Vulkan::shaderSwitch();
 		}
 	}
-	else
-		vgfx->setComputeShader(this);
 }
 
 int Shader::getVertexAttributeIndex(const std::string &name)
@@ -364,83 +365,14 @@ void Shader::updateUniform(const UniformInfo *info, int count)
 	}
 }
 
-void Shader::sendTextures(const UniformInfo *info, graphics::Texture **textures, int count)
+void Shader::applyTexture(const UniformInfo *info, int i, love::graphics::Texture *texture, UniformType /*basetype*/, bool isdefault)
 {
-	bool issampler = info->baseType == UNIFORM_SAMPLER;
-	bool isstoragetex = info->baseType == UNIFORM_STORAGETEXTURE;
-
-	count = std::min(count, info->count);
-
-	if (current == this)
-		Graphics::flushBatchedDrawsGlobal();
-
-	for (int i = 0; i < count; i++)
-	{
-		love::graphics::Texture *tex = textures[i];
-		bool isdefault = tex == nullptr;
-
-		if (tex != nullptr)
-		{
-			if (!validateTexture(info, tex, false))
-				continue;
-		}
-		else
-		{
-			auto gfx = Module::getInstance<love::graphics::Graphics>(Module::M_GRAPHICS);
-			tex = gfx->getDefaultTexture(info->textureType, info->dataBaseType, info->isDepthSampler);
-		}
-
-		int resourceindex = info->resourceIndex + i;
-		auto prevtexture = activeTextures[resourceindex];
-		activeTextures[resourceindex] = tex;
-		activeTextures[resourceindex]->retain();
-		if (prevtexture)
-			prevtexture->release();
-
-		if (tex != prevtexture)
-			setTextureDescriptor(info, (isdefault && (info->access & ACCESS_WRITE) != 0) ? nullptr : tex, i);
-	}
+	setTextureDescriptor(info, (isdefault && (info->access & ACCESS_WRITE) != 0) ? nullptr : texture, i);
 }
 
-void Shader::sendBuffers(const UniformInfo *info, love::graphics::Buffer **buffers, int count)
+void Shader::applyBuffer(const UniformInfo *info, int i, love::graphics::Buffer *buffer, UniformType /*basetype*/, bool isdefault)
 {
-	bool texelbinding = info->baseType == UNIFORM_TEXELBUFFER;
-	bool storagebinding = info->baseType == UNIFORM_STORAGEBUFFER;
-
-	count = std::min(count, info->count);
-
-	if (current == this)
-		Graphics::flushBatchedDrawsGlobal();
-
-	for (int i = 0; i < count; i++)
-	{
-		love::graphics::Buffer *buffer = buffers[i];
-		bool isdefault = buffer == nullptr;
-
-		if (buffer != nullptr)
-		{
-			if (!validateBuffer(info, buffer, false))
-				continue;
-		}
-		else
-		{
-			auto gfx = Module::getInstance<love::graphics::Graphics>(Module::M_GRAPHICS);
-			if (texelbinding)
-				buffer = gfx->getDefaultTexelBuffer(info->dataBaseType);
-			else
-				buffer = gfx->getDefaultStorageBuffer();
-		}
-
-		int resourceindex = info->resourceIndex + i;
-		auto prevbuffer = activeBuffers[resourceindex];
-		activeBuffers[resourceindex] = buffer;
-		activeBuffers[resourceindex]->retain();
-		if (prevbuffer)
-			prevbuffer->release();
-
-		if (buffer != prevbuffer)
-			setBufferDescriptor(info, (isdefault && (info->access & ACCESS_WRITE) != 0) ? nullptr : buffer, i);
-	}
+	setBufferDescriptor(info, (isdefault && (info->access & ACCESS_WRITE) != 0) ? nullptr : buffer, i);
 }
 
 void Shader::buildLocalUniforms(spirv_cross::Compiler &comp, const spirv_cross::SPIRType &type, size_t baseoff, const std::string &basename)
@@ -594,6 +526,7 @@ void Shader::compileShaders()
 
 	BindingMapper bindingMapper(spv::DecorationBinding);
 	BindingMapper ioLocationMapper(spv::DecorationLocation);
+	BindingMapper vertexInputLocationMapper(spv::DecorationLocation);
 
 	for (int i = 0; i < SHADERSTAGE_MAX_ENUM; i++)
 	{
@@ -712,25 +645,21 @@ void Shader::compileShaders()
 
 		if (shaderStage == SHADERSTAGE_VERTEX)
 		{
-			int nextAttributeIndex = ATTRIB_MAX_ENUM;
-
-			// Don't skip unused inputs, vulkan still needs to have valid
-			// bindings for them.
+			// Use the mapper on known used inputs first, so their bindings get
+			// put into the map without being changed.
 			for (const auto &r : shaderResources.stage_inputs)
 			{
-				int index;
+				auto it = reflection.vertexInputs.find(r.name);
+				if (it != reflection.vertexInputs.end() && it->second >= 0)
+					vertexInputLocationMapper(comp, spirv, r.name, 1, r.id);
+			}
 
-				BuiltinVertexAttribute builtinAttribute;
-				if (graphics::getConstant(r.name.c_str(), builtinAttribute))
-					index = (int)builtinAttribute;
-				else
-					index = nextAttributeIndex++;
-
-				uint32_t locationOffset;
-				if (!comp.get_binary_offset_for_decoration(r.id, spv::DecorationLocation, locationOffset))
-					throw love::Exception("could not get binary offset for vertex attribute %s location", r.name.c_str());
-
-				spirv[locationOffset] = (uint32_t)index;
+			for (const auto &r : shaderResources.stage_inputs)
+			{
+				// Don't skip unused inputs, vulkan still needs to have valid
+				// bindings for them. This will also avoid shuffling intentional
+				// used bindings because of the earlier loop.
+				int index = (int)vertexInputLocationMapper(comp, spirv, r.name, 1, r.id);
 
 				DataBaseType basetype = DATA_BASETYPE_FLOAT;
 
@@ -846,12 +775,18 @@ void Shader::compileShaders()
 	descriptorBufferViews.clear();
 	descriptorBufferViews.reserve(numBufferViews);
 
+	allTextureInfo.clear();
+	allTextureInfo.reserve(numTextures);
+	storageBufferInfo.clear();
+	storageBufferInfo.reserve(numBuffers);
+
 	if (localUniformData.size() > 0)
 	{
 		VkDescriptorBufferInfo bufferInfo{};
 		bufferInfo.range = localUniformData.size();
 
 		descriptorBuffers.push_back(bufferInfo);
+		storageBufferInfo.push_back({ nullptr, ACCESS_READ }); // Dummy value.
 
 		VkWriteDescriptorSet write{};
 		write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -875,6 +810,8 @@ void Shader::compileShaders()
 		{
 			VkDescriptorImageInfo imageInfo{};
 			descriptorImages.push_back(imageInfo);
+
+			allTextureInfo.push_back({ nullptr, info.access });
 
 			auto texture = activeTextures[info.resourceIndex + i];
 			if (texture != nullptr)
@@ -904,6 +841,8 @@ void Shader::compileShaders()
 		{
 			VkDescriptorImageInfo imageInfo{};
 			descriptorImages.push_back(imageInfo);
+
+			allTextureInfo.push_back({ nullptr, info.access });
 
 			auto texture = activeTextures[info.resourceIndex + i];
 			if (texture != nullptr)
@@ -961,6 +900,8 @@ void Shader::compileShaders()
 		{
 			VkDescriptorBufferInfo bufferInfo{};
 			descriptorBuffers.push_back(bufferInfo);
+
+			storageBufferInfo.push_back({ nullptr, info.access });
 
 			auto buffer = activeBuffers[info.resourceIndex + i];
 			if (buffer != nullptr)
@@ -1078,37 +1019,6 @@ void Shader::createDescriptorPoolSizes()
 	}
 }
 
-void Shader::setVideoTextures(graphics::Texture *ytexture, graphics::Texture *cbtexture, graphics::Texture *crtexture)
-{
-	std::array<graphics::Texture*, 3> textures = {
-		ytexture, cbtexture, crtexture
-	};
-
-	std::array<BuiltinUniform, 3> builtIns = {
-		BUILTIN_TEXTURE_VIDEO_Y,
-		BUILTIN_TEXTURE_VIDEO_CB,
-		BUILTIN_TEXTURE_VIDEO_CR,
-	};
-
-	static_assert(textures.size() == builtIns.size(), "expected number of textures to be the same");
-
-	for (size_t i = 0; i < textures.size(); i++)
-	{
-		const UniformInfo *u = builtinUniformInfo[builtIns[i]];
-		if (u != nullptr)
-		{
-			auto prevtexture = activeTextures[u->resourceIndex];
-			textures[i]->retain();
-			if (prevtexture)
-				prevtexture->release();
-			activeTextures[u->resourceIndex] = textures[i];
-
-			if (textures[i] != prevtexture)
-				setTextureDescriptor(u, textures[i], 0);
-		}
-	}
-}
-
 void Shader::setMainTex(graphics::Texture *texture)
 {
 	const UniformInfo *u = builtinUniformInfo[BUILTIN_TEXTURE_MAIN];
@@ -1134,10 +1044,14 @@ void Shader::setTextureDescriptor(const UniformInfo *info, love::graphics::Textu
 
 	// Samplers may change after this call, so they're set just before the
 	// descriptor set is used instead of here.
-	imageInfo.imageLayout = vkTexture != nullptr ? vkTexture->getImageLayout() : VK_IMAGE_LAYOUT_UNDEFINED;
-	imageInfo.imageView = vkTexture != nullptr ? (VkImageView)vkTexture->getRenderTargetHandle() : VK_NULL_HANDLE;
-
-	resourceDescriptorsDirty = true;
+	VkImageView view = vkTexture != nullptr ? (VkImageView)vkTexture->getRenderTargetHandle() : VK_NULL_HANDLE;
+	if (view != imageInfo.imageView)
+	{
+		imageInfo.imageLayout = vkTexture != nullptr ? vkTexture->getImageLayout() : VK_IMAGE_LAYOUT_UNDEFINED;
+		imageInfo.imageView = view;
+		allTextureInfo[info->bindingStartIndex + index].texture = texture;
+		resourceDescriptorsDirty = true;
+	}
 }
 
 void Shader::setBufferDescriptor(const UniformInfo *info, love::graphics::Buffer *buffer, int index)
@@ -1145,16 +1059,26 @@ void Shader::setBufferDescriptor(const UniformInfo *info, love::graphics::Buffer
 	if (info->baseType == UNIFORM_STORAGEBUFFER)
 	{
 		VkDescriptorBufferInfo &bufferInfo = descriptorBuffers[info->bindingStartIndex + index];
-		bufferInfo.buffer = buffer != nullptr ? (VkBuffer)buffer->getHandle() : VK_NULL_HANDLE;
-		bufferInfo.offset = 0;
-		bufferInfo.range = buffer != nullptr ? buffer->getSize() : 0;
+		VkBuffer vkbuffer = buffer != nullptr ? (VkBuffer)buffer->getHandle() : VK_NULL_HANDLE;
+		VkDeviceSize range = buffer != nullptr ? buffer->getSize() : 0;
+		if (vkbuffer != bufferInfo.buffer || bufferInfo.offset != 0 || range != bufferInfo.range)
+		{
+			bufferInfo.buffer = vkbuffer;
+			bufferInfo.offset = 0;
+			bufferInfo.range = range;
+			storageBufferInfo[info->bindingStartIndex + index].buffer = buffer;
+			resourceDescriptorsDirty = true;
+		}
 	}
 	else if (info->baseType == UNIFORM_TEXELBUFFER)
 	{
-		descriptorBufferViews[info->bindingStartIndex + index] = buffer != nullptr ? (VkBufferView)buffer->getTexelBufferHandle() : VK_NULL_HANDLE;
+		VkBufferView view = buffer != nullptr ? (VkBufferView)buffer->getTexelBufferHandle() : VK_NULL_HANDLE;
+		if (view != descriptorBufferViews[info->bindingStartIndex + index])
+		{
+			descriptorBufferViews[info->bindingStartIndex + index] = view;
+			resourceDescriptorsDirty = true;
+		}
 	}
-
-	resourceDescriptorsDirty = true;
 }
 
 void Shader::createDescriptorPool()
@@ -1203,14 +1127,26 @@ VkDescriptorSet Shader::allocateDescriptorSet()
 	}
 }
 
-VkPipeline Shader::getCachedGraphicsPipeline(Graphics *vgfx, const GraphicsPipelineConfiguration &configuration)
+VkPipeline Shader::getCachedGraphicsPipeline(Graphics *vgfx, const GraphicsPipelineConfigurationCore &configuration)
 {
-	auto it = graphicsPipelines.find(configuration);
-	if (it != graphicsPipelines.end())
+	auto it = graphicsPipelinesDynamicState.find(configuration);
+	if (it != graphicsPipelinesDynamicState.end())
 		return it->second;
 
-	VkPipeline pipeline = vgfx->createGraphicsPipeline(this, configuration);
-	graphicsPipelines.insert({ configuration, pipeline });
+	VkPipeline pipeline = vgfx->createGraphicsPipeline(this, configuration, nullptr);
+	graphicsPipelinesDynamicState.insert({ configuration, pipeline });
+	
+	return pipeline;
+}
+
+VkPipeline Shader::getCachedGraphicsPipeline(Graphics *vgfx, const GraphicsPipelineConfigurationFull &configuration)
+{
+	auto it = graphicsPipelinesNoDynamicState.find(configuration);
+	if (it != graphicsPipelinesNoDynamicState.end())
+		return it->second;
+
+	VkPipeline pipeline = vgfx->createGraphicsPipeline(this, configuration.core, &configuration.noDynamicState);
+	graphicsPipelinesNoDynamicState.insert({ configuration, pipeline });
 	
 	return pipeline;
 }

@@ -62,7 +62,11 @@
 #include <string>
 
 #ifdef LOVE_ANDROID
+#if __has_include(<SDL3/SDL.h>)
+#include <SDL3/SDL.h>
+#else
 #include <SDL.h>
+#endif
 #include "common/android.h"
 #endif
 
@@ -280,14 +284,14 @@ bool Filesystem::setSource(const char *source)
 	if (!isAAssetMounted)
 	{
 		// Is this love2d://fd/ URIs?
-		int fd = love::android::getFDFromLoveProtocol(new_search_path.c_str());
+		int fd = love::android::getFDFromLoveProtocol(source);
 		if (fd != -1)
 		{
 			PHYSFS_Io *io = (PHYSFS_Io *) love::android::getIOFromFD(fd);
 
 			if (PHYSFS_mountIo(io, "LOVE.FD", nullptr, 0))
 			{
-				gameSource = new_search_path;
+				gameSource = source;
 				return true;
 			}
 
@@ -630,10 +634,17 @@ std::string Filesystem::getFullCommonPath(CommonPath path)
 #elif defined(LOVE_ANDROID)
 
 	std::string storagepath;
-	if (isAndroidSaveExternal())
+#if SDL_VERSION_ATLEAST(3, 0, 0)
+    if (isAndroidSaveExternal())
+        storagepath = SDL_GetAndroidExternalStoragePath();
+    else
+        storagepath = SDL_GetAndroidInternalStoragePath();
+#else
+    if (isAndroidSaveExternal())
 		storagepath = SDL_AndroidGetExternalStoragePath();
 	else
 		storagepath = SDL_AndroidGetInternalStoragePath();
+#endif
 
 	switch (path)
 	{

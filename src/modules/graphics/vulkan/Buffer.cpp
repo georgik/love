@@ -62,6 +62,36 @@ Buffer::Buffer(love::graphics::Graphics *gfx, const Settings &settings, const st
 	, vgfx(dynamic_cast<Graphics*>(gfx))
 	, usageFlags(settings.usageFlags)
 {
+	// All buffers can be copied to and from.
+	barrierDstAccessFlags = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+	barrierDstStageFlags = VK_PIPELINE_STAGE_TRANSFER_BIT;
+
+	if (usageFlags & BUFFERUSAGEFLAG_VERTEX)
+	{
+		barrierDstAccessFlags |= VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT;
+		barrierDstStageFlags |= VK_PIPELINE_STAGE_VERTEX_INPUT_BIT;
+	}
+	if (usageFlags & BUFFERUSAGEFLAG_INDEX)
+	{
+		barrierDstAccessFlags |= VK_ACCESS_INDEX_READ_BIT;
+		barrierDstStageFlags |= VK_PIPELINE_STAGE_VERTEX_INPUT_BIT;
+	}
+	if (usageFlags & BUFFERUSAGEFLAG_TEXEL)
+	{
+		barrierDstAccessFlags |= VK_ACCESS_SHADER_READ_BIT;
+		barrierDstStageFlags |= VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+	}
+	if (usageFlags & BUFFERUSAGEFLAG_SHADER_STORAGE)
+	{
+		barrierDstAccessFlags |= VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+		barrierDstStageFlags |= VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+	}
+	if (usageFlags & BUFFERUSAGEFLAG_INDIRECT_ARGUMENTS)
+	{
+		barrierDstAccessFlags |= VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
+		barrierDstStageFlags |= VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT;
+	}
+
 	loadVolatile();
 }
 
@@ -84,7 +114,11 @@ bool Buffer::loadVolatile()
 		throw love::Exception("failed to create buffer");
 
 	if (zeroInitialize)
-		vkCmdFillBuffer(vgfx->getCommandBufferForDataTransfer(), buffer, 0, VK_WHOLE_SIZE, 0);
+	{
+		auto cmd = vgfx->getCommandBufferForDataTransfer();
+		vkCmdFillBuffer(cmd, buffer, 0, VK_WHOLE_SIZE, 0);
+		postGPUWriteBarrier(cmd);
+	}
 
 	if (initialData)
 		fill(0, size, initialData);
@@ -235,7 +269,10 @@ bool Buffer::fill(size_t offset, size_t size, const void *data)
 	bufferCopy.dstOffset = offset;
 	bufferCopy.size = size;
 
-	vkCmdCopyBuffer(vgfx->getCommandBufferForDataTransfer(), fillBuffer, buffer, 1, &bufferCopy);
+	auto cmd = vgfx->getCommandBufferForDataTransfer();
+	vkCmdCopyBuffer(cmd, fillBuffer, buffer, 1, &bufferCopy);
+
+	postGPUWriteBarrier(cmd);
 
 	vgfx->queueCleanUp([allocator = allocator, fillBuffer = fillBuffer, fillAllocation = fillAllocation]() {
 		vmaDestroyBuffer(allocator, fillBuffer, fillAllocation);
@@ -258,7 +295,10 @@ void Buffer::unmap(size_t usedoffset, size_t usedsize)
 		if (~memoryProperties & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)
 			vmaFlushAllocation(allocator, stagingAllocation, bufferCopy.srcOffset, usedsize);
 
-		vkCmdCopyBuffer(vgfx->getCommandBufferForDataTransfer(), stagingBuffer, buffer, 1, &bufferCopy);
+		auto cmd = vgfx->getCommandBufferForDataTransfer();
+		vkCmdCopyBuffer(cmd, stagingBuffer, buffer, 1, &bufferCopy);
+
+		postGPUWriteBarrier(cmd);
 
 		vgfx->queueCleanUp([allocator = allocator, stagingBuffer = stagingBuffer, stagingAllocation = stagingAllocation]() {
 			vmaDestroyBuffer(allocator, stagingBuffer, stagingAllocation);
@@ -268,7 +308,9 @@ void Buffer::unmap(size_t usedoffset, size_t usedsize)
 
 void Buffer::clearInternal(size_t offset, size_t size)
 {
-	vkCmdFillBuffer(vgfx->getCommandBufferForDataTransfer(), buffer, offset, size, 0);
+	auto cmd = vgfx->getCommandBufferForDataTransfer();
+	vkCmdFillBuffer(cmd, buffer, offset, size, 0);
+	postGPUWriteBarrier(cmd);
 }
 
 void Buffer::copyTo(love::graphics::Buffer *dest, size_t sourceoffset, size_t destoffset, size_t size)
@@ -281,6 +323,18 @@ void Buffer::copyTo(love::graphics::Buffer *dest, size_t sourceoffset, size_t de
 	bufferCopy.size = size;
 
 	vkCmdCopyBuffer(commandBuffer, buffer, (VkBuffer) dest->getHandle(), 1, &bufferCopy);
+
+	((Buffer *)dest)->postGPUWriteBarrier(commandBuffer);
+}
+
+void Buffer::postGPUWriteBarrier(VkCommandBuffer cmd)
+{
+	VkMemoryBarrier barrier{};
+	barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+	barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+	barrier.dstAccessMask = barrierDstAccessFlags;
+
+	vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, barrierDstStageFlags, 0, 1, &barrier, 0, nullptr, 0, nullptr);
 }
 
 } // vulkan

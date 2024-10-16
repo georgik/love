@@ -37,7 +37,11 @@
 #endif // LOVE_WINDOWS
 
 #ifdef LOVE_ANDROID
+#if __has_include(<SDL3/SDL.h>)
+#include <SDL3/SDL.h>
+#else
 #include <SDL.h>
+#endif
 #endif // LOVE_ANDROID
 
 #ifdef LOVE_LEGENDARY_CONSOLE_IO_HACK
@@ -48,7 +52,11 @@
 #endif // LOVE_LEGENDARY_CONSOLE_IO_HACK
 
 #ifdef LOVE_LEGENDARY_ACCELEROMETER_AS_JOYSTICK_HACK
+#if __has_include(<SDL3/SDL_version.h>)
+#undef LOVE_LEGENDARY_ACCELEROMETER_AS_JOYSTICK_HACK
+#else
 #include <SDL_hints.h>
+#endif
 #endif // LOVE_LEGENDARY_ACCELEROMETER_AS_JOYSTICK_HACK
 
 // Libraries.

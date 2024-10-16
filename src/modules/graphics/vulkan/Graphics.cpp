@@ -29,8 +29,13 @@
 #include "Shader.h"
 #include "Vulkan.h"
 
+#if __has_include(<SDL3/SDL_version.h>)
+#include <SDL3/SDL_version.h>
+#include <SDL3/SDL_vulkan.h>
+#else
 #include <SDL_version.h>
 #include <SDL_vulkan.h>
+#endif
 
 #include <algorithm>
 #include <vector>
@@ -97,7 +102,11 @@ static void checkOptionalInstanceExtensions(OptionalInstanceExtensions& ext)
 Graphics::Graphics()
 	: love::graphics::Graphics("love.graphics.vulkan")
 {
+#if SDL_VERSION_ATLEAST(3, 0, 0)
+	if (!SDL_Vulkan_LoadLibrary(nullptr))
+#else
 	if (SDL_Vulkan_LoadLibrary(nullptr))
+#endif
 		throw love::Exception("could not find vulkan");
 
 	volkInitializeCustom((PFN_vkGetInstanceProcAddr)SDL_Vulkan_GetVkGetInstanceProcAddr());
@@ -351,7 +360,7 @@ void Graphics::submitGpuCommands(SubmitMode submitMode, void *screenshotCallback
 				Vulkan::cmdTransitionImageLayout(
 					commandBuffers.at(currentFrame),
 					backbufferImage,
-					swapChainPixelFormat,
+					swapChainPixelFormat, true,
 					VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
 					VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
 			}
@@ -382,7 +391,7 @@ void Graphics::submitGpuCommands(SubmitMode submitMode, void *screenshotCallback
 			Vulkan::cmdTransitionImageLayout(
 				commandBuffers.at(currentFrame),
 				backbufferImage,
-				swapChainPixelFormat,
+				swapChainPixelFormat, true,
 				VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
 				VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
 
@@ -405,7 +414,7 @@ void Graphics::submitGpuCommands(SubmitMode submitMode, void *screenshotCallback
 			Vulkan::cmdTransitionImageLayout(
 				commandBuffers.at(currentFrame),
 				backbufferImage,
-				swapChainPixelFormat,
+				swapChainPixelFormat, true,
 				VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
 				fakeBackbuffer == nullptr ? VK_IMAGE_LAYOUT_PRESENT_SRC_KHR : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
 		}
@@ -867,7 +876,7 @@ Graphics::RendererInfo Graphics::getRendererInfo() const
 
 void Graphics::draw(const DrawCommand &cmd)
 {
-	prepareDraw(*cmd.attributes, *cmd.buffers, cmd.texture, cmd.primitiveType, cmd.cullMode);
+	prepareDraw(cmd.attributesID, *cmd.buffers, cmd.texture, cmd.primitiveType, cmd.cullMode);
 
 	if (cmd.indirectBuffer != nullptr)
 	{
@@ -893,7 +902,7 @@ void Graphics::draw(const DrawCommand &cmd)
 
 void Graphics::draw(const DrawIndexedCommand &cmd)
 {
-	prepareDraw(*cmd.attributes, *cmd.buffers, cmd.texture, cmd.primitiveType, cmd.cullMode);
+	prepareDraw(cmd.attributesID, *cmd.buffers, cmd.texture, cmd.primitiveType, cmd.cullMode);
 
 	vkCmdBindIndexBuffer(
 		commandBuffers.at(currentFrame),
@@ -924,12 +933,12 @@ void Graphics::draw(const DrawIndexedCommand &cmd)
 	drawCalls++;
 }
 
-void Graphics::drawQuads(int start, int count, const VertexAttributes &attributes, const BufferBindings &buffers, graphics::Texture *texture)
+void Graphics::drawQuads(int start, int count, VertexAttributesID attributesID, const BufferBindings &buffers, graphics::Texture *texture)
 {
 	const int MAX_VERTICES_PER_DRAW = LOVE_UINT16_MAX;
 	const int MAX_QUADS_PER_DRAW = MAX_VERTICES_PER_DRAW / 4;
 
-	prepareDraw(attributes, buffers, texture, PRIMITIVE_TRIANGLES, CULL_NONE);
+	prepareDraw(attributesID, buffers, texture, PRIMITIVE_TRIANGLES, CULL_NONE);
 
 	vkCmdBindIndexBuffer(
 		commandBuffers.at(currentFrame),
@@ -1194,8 +1203,56 @@ graphics::StreamBuffer *Graphics::newStreamBuffer(BufferUsage type, size_t size)
 	return new StreamBuffer(this, type, size);
 }
 
+static bool computeDispatchBarrierFlags(Shader *shader, VkAccessFlags &dstAccessFlags, VkPipelineStageFlags &dstStageFlags)
+{
+	for (const auto &info : shader->getActiveTextureInfo())
+	{
+		if ((info.access & Shader::ACCESS_WRITE) == 0)
+			continue;
+
+		if (info.texture == nullptr)
+			return false;
+
+		auto tex = (Texture *) info.texture;
+
+		// All writable images use the GENERAL layout.
+		// TODO: this is pretty messy.
+		VkAccessFlags texAccessFlags = 0;
+		VkPipelineStageFlags texStageFlags = 0;
+		bool depthStencil  = isPixelFormatDepthStencil(tex->getPixelFormat());
+		Vulkan::setImageLayoutTransitionOptions(false, tex->isRenderTarget(), depthStencil, VK_IMAGE_LAYOUT_GENERAL, texAccessFlags, texStageFlags);
+		
+		dstAccessFlags |= texAccessFlags;
+		dstStageFlags |= texStageFlags;
+	}
+
+	for (const auto &info : shader->getActiveStorageBufferInfo())
+	{
+		if ((info.access & Shader::ACCESS_WRITE) == 0)
+			continue;
+
+		if (info.buffer == nullptr)
+			return false;
+
+		auto b = (Buffer *) info.buffer;
+		dstAccessFlags |= b->getBarrierDstAccessFlags();
+		dstStageFlags |= b->getBarrierDstStageFlags();
+	}
+
+	return true;
+}
+
 bool Graphics::dispatch(love::graphics::Shader *shader, int x, int y, int z)
 {
+	auto computeShader = (Shader *) shader;
+
+	VkMemoryBarrier barrier{};
+	barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+	barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+	VkPipelineStageFlags dstStageMask = 0;
+	if (!computeDispatchBarrierFlags(computeShader, barrier.dstAccessMask, dstStageMask))
+		return false;
+
 	usedShadersInFrame.insert(computeShader);
 
 	if (renderPassState.active)
@@ -1205,14 +1262,26 @@ bool Graphics::dispatch(love::graphics::Shader *shader, int x, int y, int z)
 
 	computeShader->cmdPushDescriptorSets(commandBuffers.at(currentFrame), VK_PIPELINE_BIND_POINT_COMPUTE);
 
-	// TODO: does this need any layout transitions?
 	vkCmdDispatch(commandBuffers.at(currentFrame), (uint32) x, (uint32) y, (uint32) z);
+
+	// Image layout transitions aren't needed, every writable image will be in the GENERAL layout.
+	if (barrier.dstAccessMask != 0 || dstStageMask != 0)
+		vkCmdPipelineBarrier(commandBuffers.at(currentFrame), VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, dstStageMask, 0, 1, &barrier, 0, nullptr, 0, nullptr);
 
 	return true;
 }
 
 bool Graphics::dispatch(love::graphics::Shader *shader, love::graphics::Buffer *indirectargs, size_t argsoffset)
 {
+	auto computeShader = (Shader *) shader;
+
+	VkMemoryBarrier barrier{};
+	barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+	barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+	VkPipelineStageFlags dstStageMask = 0;
+	if (!computeDispatchBarrierFlags(computeShader, barrier.dstAccessMask, dstStageMask))
+		return false;
+
 	usedShadersInFrame.insert(computeShader);
 
 	if (renderPassState.active)
@@ -1222,8 +1291,11 @@ bool Graphics::dispatch(love::graphics::Shader *shader, love::graphics::Buffer *
 
 	computeShader->cmdPushDescriptorSets(commandBuffers.at(currentFrame), VK_PIPELINE_BIND_POINT_COMPUTE);
 
-	// TODO: does this need any layout transitions?
 	vkCmdDispatchIndirect(commandBuffers.at(currentFrame), (VkBuffer) indirectargs->getHandle(), argsoffset);
+
+	// Image layout transitions aren't needed, every writable image will be in the GENERAL layout.
+	if (barrier.dstAccessMask != 0 || dstStageMask != 0)
+		vkCmdPipelineBarrier(commandBuffers.at(currentFrame), VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, dstStageMask, 0, 1, &barrier, 0, nullptr, 0, nullptr);
 
 	return true;
 }
@@ -1315,7 +1387,7 @@ void Graphics::beginFrame()
 		Vulkan::cmdTransitionImageLayout(
 			commandBuffers.at(currentFrame),
 			swapChainImages[imageIndex],
-			swapChainPixelFormat,
+			swapChainPixelFormat, true,
 			VK_IMAGE_LAYOUT_UNDEFINED,
 			VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
 	}
@@ -1326,7 +1398,7 @@ void Graphics::beginFrame()
 			Vulkan::cmdTransitionImageLayout(
 				commandBuffers.at(currentFrame),
 				depthImage,
-				depthStencilPixelFormat,
+				depthStencilPixelFormat, true,
 				VK_IMAGE_LAYOUT_UNDEFINED,
 				VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
 
@@ -1334,7 +1406,7 @@ void Graphics::beginFrame()
 			Vulkan::cmdTransitionImageLayout(
 				commandBuffers.at(currentFrame),
 				colorImage,
-				swapChainPixelFormat,
+				swapChainPixelFormat, true,
 				VK_IMAGE_LAYOUT_UNDEFINED,
 				VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
 
@@ -1807,7 +1879,7 @@ void Graphics::createSurface()
 	auto window = Module::getInstance<love::window::Window>(M_WINDOW);
 	const void *handle = window->getHandle();
 #if SDL_VERSION_ATLEAST(3, 0, 0)
-	if (SDL_Vulkan_CreateSurface((SDL_Window*)handle, instance, nullptr, &surface) != SDL_TRUE)
+	if (!SDL_Vulkan_CreateSurface((SDL_Window*)handle, instance, nullptr, &surface))
 		throw love::Exception("failed to create window surface");
 #else
 	if (SDL_Vulkan_CreateSurface((SDL_Window*)handle, instance, &surface) != SDL_TRUE)
@@ -2134,6 +2206,25 @@ VkRenderPass Graphics::createRenderPass(RenderPassConfiguration &configuration)
 	VkSubpassDescription subPass{};
 	subPass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
 
+	VkSubpassDependency beginDependency{};
+	beginDependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+	beginDependency.dstSubpass = 0;
+	beginDependency.srcStageMask = VK_PIPELINE_STAGE_TRANSFER_BIT;
+	beginDependency.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+	beginDependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
+		| VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+	beginDependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT
+		| VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+
+	VkSubpassDependency endDependency{};
+	endDependency.srcSubpass = 0;
+	endDependency.dstSubpass = VK_SUBPASS_EXTERNAL;
+	endDependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+	endDependency.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT
+		| VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+	endDependency.dstStageMask = VK_PIPELINE_STAGE_TRANSFER_BIT;
+	endDependency.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+
 	std::vector<VkAttachmentDescription> attachments;
 	std::vector<VkAttachmentReference> colorAttachmentRefs;
 
@@ -2152,9 +2243,21 @@ VkRenderPass Graphics::createRenderPass(RenderPassConfiguration &configuration)
 		colorDescription.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
 		colorDescription.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
 		colorDescription.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-		colorDescription.initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-		colorDescription.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+		colorDescription.initialLayout = colorAttachment.layout;
+		colorDescription.finalLayout = colorAttachment.layout;
 		attachments.push_back(colorDescription);
+
+		VkAccessFlags texBeginAccessFlags = 0;
+		VkPipelineStageFlags texBeginStageFlags = 0;
+		Vulkan::setImageLayoutTransitionOptions(true, true, false, colorAttachment.layout, texBeginAccessFlags, texBeginStageFlags);
+		beginDependency.srcAccessMask |= texBeginAccessFlags;
+		beginDependency.srcStageMask |= texBeginStageFlags;
+
+		VkAccessFlags texEndAccessFlags = 0;
+		VkPipelineStageFlags texEndStageFlags = 0;
+		Vulkan::setImageLayoutTransitionOptions(false, true, false, colorAttachment.layout, texEndAccessFlags, texEndStageFlags);
+		endDependency.dstAccessMask |= texEndAccessFlags;
+		endDependency.dstStageMask |= texEndStageFlags;
 	}
 
 	subPass.colorAttachmentCount = static_cast<uint32_t>(colorAttachmentRefs.size());
@@ -2174,9 +2277,21 @@ VkRenderPass Graphics::createRenderPass(RenderPassConfiguration &configuration)
 		depthStencilAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
 		depthStencilAttachment.stencilLoadOp = configuration.staticData.depthStencilAttachment.stencilLoadOp;
 		depthStencilAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_STORE;
-		depthStencilAttachment.initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-		depthStencilAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+		depthStencilAttachment.initialLayout = configuration.staticData.depthStencilAttachment.layout;
+		depthStencilAttachment.finalLayout = configuration.staticData.depthStencilAttachment.layout;
 		attachments.push_back(depthStencilAttachment);
+
+		VkAccessFlags texBeginAccessFlags = 0;
+		VkPipelineStageFlags texBeginStageFlags = 0;
+		Vulkan::setImageLayoutTransitionOptions(true, true, true, configuration.staticData.depthStencilAttachment.layout, texBeginAccessFlags, texBeginStageFlags);
+		beginDependency.srcAccessMask |= texBeginAccessFlags;
+		beginDependency.srcStageMask |= texBeginStageFlags;
+
+		VkAccessFlags texEndAccessFlags = 0;
+		VkPipelineStageFlags texEndStageFlags = 0;
+		Vulkan::setImageLayoutTransitionOptions(false, true, true, configuration.staticData.depthStencilAttachment.layout, texEndAccessFlags, texEndStageFlags);
+		endDependency.dstAccessMask |= texEndAccessFlags;
+		endDependency.dstStageMask |= texEndStageFlags;
 	}
 
 	VkAttachmentReference colorAttachmentResolveRef{};
@@ -2198,23 +2313,7 @@ VkRenderPass Graphics::createRenderPass(RenderPassConfiguration &configuration)
 		attachments.push_back(colorAttachmentResolve);
 	}
 
-	VkSubpassDependency dependency{};
-	dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
-	dependency.dstSubpass = 0;
-	dependency.srcStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT;
-	dependency.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-	dependency.dstStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-	dependency.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-
-	VkSubpassDependency readbackDependency{};
-	readbackDependency.srcSubpass = 0;
-	readbackDependency.dstSubpass = VK_SUBPASS_EXTERNAL;
-	readbackDependency.srcStageMask = VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
-	readbackDependency.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-	readbackDependency.dstStageMask = VK_PIPELINE_STAGE_TRANSFER_BIT;
-	readbackDependency.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-
-	std::array<VkSubpassDependency, 2> dependencies = { dependency, readbackDependency };
+	std::array<VkSubpassDependency, 2> dependencies = { beginDependency, endDependency };
 
 	VkRenderPassCreateInfo createInfo{};
 	createInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
@@ -2328,7 +2427,7 @@ void Graphics::createVulkanVertexFormat(
 	}
 }
 
-void Graphics::prepareDraw(const VertexAttributes &attributes, const BufferBindings &buffers, graphics::Texture *texture, PrimitiveType primitiveType, CullMode cullmode)
+void Graphics::prepareDraw(VertexAttributesID attributesID, const BufferBindings &buffers, graphics::Texture *texture, PrimitiveType primitiveType, CullMode cullmode)
 {
 	if (!renderPassState.active)
 		startRenderPass();
@@ -2337,31 +2436,37 @@ void Graphics::prepareDraw(const VertexAttributes &attributes, const BufferBindi
 
 	usedShadersInFrame.insert(s);
 
-	GraphicsPipelineConfiguration configuration{};
+	GraphicsPipelineConfigurationFull configuration{};
 
-	configuration.renderPass = renderPassState.beginInfo.renderPass;
-	configuration.vertexAttributes = attributes;
-	configuration.wireFrame = states.back().wireframe;
-	configuration.blendState = states.back().blend;
-	configuration.colorChannelMask = states.back().colorMask;
-	configuration.msaaSamples = renderPassState.msaa;
-	configuration.numColorAttachments = renderPassState.numColorAttachments;
-	configuration.packedColorAttachmentFormats = renderPassState.packedColorAttachmentFormats;
-	configuration.primitiveType = primitiveType;
+	configuration.core.renderPass = renderPassState.beginInfo.renderPass;
+	configuration.core.attributesID = attributesID;
+	configuration.core.wireFrame = states.back().wireframe;
+	configuration.core.blendStateKey = states.back().blend.toKey();
+	configuration.core.colorChannelMask = states.back().colorMask;
+	configuration.core.msaaSamples = renderPassState.msaa;
+	configuration.core.numColorAttachments = renderPassState.numColorAttachments;
+	configuration.core.packedColorAttachmentFormats = renderPassState.packedColorAttachmentFormats;
+	configuration.core.primitiveType = primitiveType;
+
+	VkPipeline pipeline = VK_NULL_HANDLE;
 
 	if (optionalDeviceExtensions.extendedDynamicState)
+	{
 		vkCmdSetCullModeEXT(commandBuffers.at(currentFrame), Vulkan::getCullMode(cullmode));
+		pipeline = s->getCachedGraphicsPipeline(this, configuration.core);
+	}
 	else
 	{
-		configuration.dynamicState.winding = states.back().winding;
-		configuration.dynamicState.depthState.compare = states.back().depthTest;
-		configuration.dynamicState.depthState.write = states.back().depthWrite;
-		configuration.dynamicState.stencilAction = states.back().stencil.action;
-		configuration.dynamicState.stencilCompare = states.back().stencil.compare;
-		configuration.dynamicState.cullmode = cullmode;
+		configuration.noDynamicState.winding = states.back().winding;
+		configuration.noDynamicState.depthState.compare = states.back().depthTest;
+		configuration.noDynamicState.depthState.write = states.back().depthWrite;
+		configuration.noDynamicState.stencilAction = states.back().stencil.action;
+		configuration.noDynamicState.stencilCompare = states.back().stencil.compare;
+		configuration.noDynamicState.cullmode = cullmode;
+
+		pipeline = s->getCachedGraphicsPipeline(this, configuration);
 	}
 
-	VkPipeline pipeline = s->getCachedGraphicsPipeline(this, configuration);
 	if (pipeline != renderPassState.pipeline)
 	{
 		vkCmdBindPipeline(commandBuffers.at(currentFrame), VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
@@ -2417,11 +2522,13 @@ void Graphics::setDefaultRenderPass()
 	renderPassState.msaa = msaaSamples;
 	renderPassState.numColorAttachments = 1;
 	renderPassState.packedColorAttachmentFormats = (uint8)swapChainPixelFormat;
-	renderPassState.transitionImages.clear();
 
 	RenderPassConfiguration renderPassConfiguration{};
-	renderPassConfiguration.colorAttachments.push_back({ swapChainImageFormat, VK_ATTACHMENT_LOAD_OP_LOAD, msaaSamples });
-	renderPassConfiguration.staticData.depthStencilAttachment = { depthStencilFormat, VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_LOAD_OP_LOAD, msaaSamples };
+
+	renderPassConfiguration.colorAttachments.push_back({ swapChainImageFormat, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_ATTACHMENT_LOAD_OP_LOAD, msaaSamples });
+
+	VkFormat dsformat = backbufferHasDepth || backbufferHasStencil ? depthStencilFormat : VK_FORMAT_UNDEFINED;
+	renderPassConfiguration.staticData.depthStencilAttachment = { dsformat, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_LOAD_OP_LOAD, msaaSamples };
 	if (msaaSamples & VK_SAMPLE_COUNT_1_BIT)
 		renderPassConfiguration.staticData.resolve = false;
 	else
@@ -2483,42 +2590,28 @@ void Graphics::setRenderPass(const RenderTargets &rts, int pixelw, int pixelh, b
 	for (const auto &color : rts.colors)
 		renderPassConfiguration.colorAttachments.push_back({ 
 			Vulkan::getTextureFormat(color.texture->getPixelFormat()).internalFormat,
+			((Texture*)color.texture)->getImageLayout(),
 			VK_ATTACHMENT_LOAD_OP_LOAD,
 			dynamic_cast<Texture*>(color.texture)->getMsaaSamples() });
 	if (rts.depthStencil.texture != nullptr)
 		renderPassConfiguration.staticData.depthStencilAttachment = {
 			Vulkan::getTextureFormat(rts.depthStencil.texture->getPixelFormat()).internalFormat,
+			((Texture*)rts.depthStencil.texture)->getImageLayout(),
 			VK_ATTACHMENT_LOAD_OP_LOAD,
 			VK_ATTACHMENT_LOAD_OP_LOAD,
 			dynamic_cast<Texture*>(rts.depthStencil.texture)->getMsaaSamples() };
 
 	FramebufferConfiguration configuration{};
 
-	std::vector<std::tuple<VkImage, PixelFormat, VkImageLayout, VkImageLayout, int, int>> transitionImages;
-
 	for (const auto &color : rts.colors)
 	{
 		auto tex = (Texture*)color.texture;
 		configuration.colorViews.push_back(tex->getRenderTargetView(color.mipmap, color.slice));
-		const Texture::ViewInfo &viewinfo = tex->getRootViewInfo();
-		VkImageLayout imagelayout = tex->getImageLayout();
-		if (imagelayout != VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
-		{
-			transitionImages.push_back({ (VkImage)tex->getHandle(), tex->getPixelFormat(), imagelayout, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-				viewinfo.startMipmap + color.mipmap, viewinfo.startLayer + color.slice });
-		}
 	}
 	if (rts.depthStencil.texture != nullptr)
 	{
 		auto tex = (Texture*)rts.depthStencil.texture;
 		configuration.staticData.depthView = tex->getRenderTargetView(rts.depthStencil.mipmap, rts.depthStencil.slice);
-		const Texture::ViewInfo &viewinfo = tex->getRootViewInfo();
-		VkImageLayout imagelayout = tex->getImageLayout();
-		if (imagelayout != VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
-		{
-			transitionImages.push_back({ (VkImage)tex->getHandle(), tex->getPixelFormat(), imagelayout, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-				viewinfo.startMipmap + rts.depthStencil.mipmap, viewinfo.startLayer + rts.depthStencil.slice });
-		}
 	}
 
 	configuration.staticData.width = static_cast<uint32_t>(pixelw);
@@ -2547,7 +2640,6 @@ void Graphics::setRenderPass(const RenderTargets &rts, int pixelw, int pixelh, b
 	renderPassState.packedColorAttachmentFormats = 0;
 	for (size_t i = 0; i < rts.colors.size(); i++)
 		renderPassState.packedColorAttachmentFormats |= ((uint64)rts.colors[i].texture->getPixelFormat()) << (i * 8ull);
-	renderPassState.transitionImages = std::move(transitionImages);
 }
 
 void Graphics::startRenderPass()
@@ -2572,9 +2664,6 @@ void Graphics::startRenderPass()
 	renderPassState.framebufferConfiguration.staticData.renderPass = renderPassState.beginInfo.renderPass;
 	renderPassState.beginInfo.framebuffer = getFramebuffer(renderPassState.framebufferConfiguration);
 
-	for (const auto &[image, format, imageLayout, renderLayout, rootmip, rootlayer] : renderPassState.transitionImages)
-		Vulkan::cmdTransitionImageLayout(commandBuffers.at(currentFrame), image, format, imageLayout, renderLayout, rootmip, 1, rootlayer, 1);
-
 	vkCmdBeginRenderPass(commandBuffers.at(currentFrame), &renderPassState.beginInfo, VK_SUBPASS_CONTENTS_INLINE);
 
 	applyScissor();
@@ -2585,9 +2674,6 @@ void Graphics::endRenderPass()
 	renderPassState.active = false;
 
 	vkCmdEndRenderPass(commandBuffers.at(currentFrame));
-
-	for (const auto &[image, format, imageLayout, renderLayout, rootmip, rootlayer] : renderPassState.transitionImages)
-		Vulkan::cmdTransitionImageLayout(commandBuffers.at(currentFrame), image, format, renderLayout, imageLayout, rootmip, 1, rootlayer, 1);
 
 	for (auto &colorAttachment : renderPassState.renderPassConfiguration.colorAttachments)
 		colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
@@ -2677,11 +2763,6 @@ void Graphics::requestSwapchainRecreation()
 	}
 }
 
-void Graphics::setComputeShader(Shader *shader)
-{
-	computeShader = shader;
-}
-
 VkSampler Graphics::getCachedSampler(const SamplerState &samplerState)
 {
 	auto samplerkey = samplerState.toKey();
@@ -2696,7 +2777,7 @@ VkSampler Graphics::getCachedSampler(const SamplerState &samplerState)
 	}
 }
 
-VkPipeline Graphics::createGraphicsPipeline(Shader *shader, const GraphicsPipelineConfiguration &configuration)
+VkPipeline Graphics::createGraphicsPipeline(Shader *shader, const GraphicsPipelineConfigurationCore &configuration, const GraphicsPipelineConfigurationNoDynamicState *noDynamicStateConfiguration)
 {
 	VkGraphicsPipelineCreateInfo pipelineInfo{};
 	pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
@@ -2706,7 +2787,10 @@ VkPipeline Graphics::createGraphicsPipeline(Shader *shader, const GraphicsPipeli
 	std::vector<VkVertexInputBindingDescription> bindingDescriptions;
 	std::vector<VkVertexInputAttributeDescription> attributeDescriptions;
 
-	createVulkanVertexFormat(shader, configuration.vertexAttributes, bindingDescriptions, attributeDescriptions);
+	VertexAttributes vertexAttributes;
+	findVertexAttributes(configuration.attributesID, vertexAttributes);
+
+	createVulkanVertexFormat(shader, vertexAttributes, bindingDescriptions, attributeDescriptions);
 
 	VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
 	vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
@@ -2733,8 +2817,8 @@ VkPipeline Graphics::createGraphicsPipeline(Shader *shader, const GraphicsPipeli
 	rasterizer.lineWidth = 1.0f;
 	if (!optionalDeviceExtensions.extendedDynamicState)
 	{
-		rasterizer.cullMode = Vulkan::getCullMode(configuration.dynamicState.cullmode);
-		rasterizer.frontFace = Vulkan::getFrontFace(configuration.dynamicState.winding);
+		rasterizer.cullMode = Vulkan::getCullMode(noDynamicStateConfiguration->cullmode);
+		rasterizer.frontFace = Vulkan::getFrontFace(noDynamicStateConfiguration->winding);
 	}
 
 	rasterizer.depthBiasEnable = VK_FALSE;
@@ -2752,8 +2836,8 @@ VkPipeline Graphics::createGraphicsPipeline(Shader *shader, const GraphicsPipeli
 	depthStencil.depthTestEnable = VK_TRUE;
 	if (!optionalDeviceExtensions.extendedDynamicState)
 	{
-		depthStencil.depthWriteEnable = Vulkan::getBool(configuration.dynamicState.depthState.write);
-		depthStencil.depthCompareOp = Vulkan::getCompareOp(configuration.dynamicState.depthState.compare);
+		depthStencil.depthWriteEnable = Vulkan::getBool(noDynamicStateConfiguration->depthState.write);
+		depthStencil.depthCompareOp = Vulkan::getCompareOp(noDynamicStateConfiguration->depthState.compare);
 	}
 	depthStencil.depthBoundsTestEnable = VK_FALSE;
 	depthStencil.minDepthBounds = 0.0f;
@@ -2764,31 +2848,33 @@ VkPipeline Graphics::createGraphicsPipeline(Shader *shader, const GraphicsPipeli
 	if (!optionalDeviceExtensions.extendedDynamicState)
 	{
 		depthStencil.front.failOp = VK_STENCIL_OP_KEEP;
-		depthStencil.front.passOp = Vulkan::getStencilOp(configuration.dynamicState.stencilAction);
+		depthStencil.front.passOp = Vulkan::getStencilOp(noDynamicStateConfiguration->stencilAction);
 		depthStencil.front.depthFailOp = VK_STENCIL_OP_KEEP;
-		depthStencil.front.compareOp = Vulkan::getCompareOp(getReversedCompareMode(configuration.dynamicState.stencilCompare));
+		depthStencil.front.compareOp = Vulkan::getCompareOp(getReversedCompareMode(noDynamicStateConfiguration->stencilCompare));
 
 		depthStencil.back.failOp = VK_STENCIL_OP_KEEP;
-		depthStencil.back.passOp = Vulkan::getStencilOp(configuration.dynamicState.stencilAction);
+		depthStencil.back.passOp = Vulkan::getStencilOp(noDynamicStateConfiguration->stencilAction);
 		depthStencil.back.depthFailOp = VK_STENCIL_OP_KEEP;
-		depthStencil.back.compareOp = Vulkan::getCompareOp(getReversedCompareMode(configuration.dynamicState.stencilCompare));
+		depthStencil.back.compareOp = Vulkan::getCompareOp(getReversedCompareMode(noDynamicStateConfiguration->stencilCompare));
 	}
 
 	pipelineInfo.pDepthStencilState = &depthStencil;
 
+	BlendState blendState = BlendState::fromKey(configuration.blendStateKey);
+
 	VkPipelineColorBlendAttachmentState colorBlendAttachment{};
 	colorBlendAttachment.colorWriteMask = Vulkan::getColorMask(configuration.colorChannelMask);
-	colorBlendAttachment.blendEnable = Vulkan::getBool(configuration.blendState.enable);
-	colorBlendAttachment.srcColorBlendFactor = Vulkan::getBlendFactor(configuration.blendState.srcFactorRGB);
-	colorBlendAttachment.dstColorBlendFactor = Vulkan::getBlendFactor(configuration.blendState.dstFactorRGB);
-	colorBlendAttachment.colorBlendOp = Vulkan::getBlendOp(configuration.blendState.operationRGB);
-	colorBlendAttachment.srcAlphaBlendFactor = Vulkan::getBlendFactor(configuration.blendState.srcFactorA);
-	colorBlendAttachment.dstAlphaBlendFactor = Vulkan::getBlendFactor(configuration.blendState.dstFactorA);
-	colorBlendAttachment.alphaBlendOp = Vulkan::getBlendOp(configuration.blendState.operationA);
+	colorBlendAttachment.blendEnable = Vulkan::getBool(blendState.enable);
+	colorBlendAttachment.srcColorBlendFactor = Vulkan::getBlendFactor(blendState.srcFactorRGB);
+	colorBlendAttachment.dstColorBlendFactor = Vulkan::getBlendFactor(blendState.dstFactorRGB);
+	colorBlendAttachment.colorBlendOp = Vulkan::getBlendOp(blendState.operationRGB);
+	colorBlendAttachment.srcAlphaBlendFactor = Vulkan::getBlendFactor(blendState.srcFactorA);
+	colorBlendAttachment.dstAlphaBlendFactor = Vulkan::getBlendFactor(blendState.dstFactorA);
+	colorBlendAttachment.alphaBlendOp = Vulkan::getBlendOp(blendState.operationA);
 
 	std::vector<VkPipelineColorBlendAttachmentState> colorBlendAttachments(configuration.numColorAttachments, colorBlendAttachment);
 
-	if (configuration.blendState.enable)
+	if (blendState.enable)
 	{
 		for (uint32 i = 0; i < configuration.numColorAttachments; i++)
 		{

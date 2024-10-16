@@ -34,8 +34,13 @@
 #endif
 
 // SDL
+#if __has_include(<SDL3/SDL_loadso.h>)
+#include <SDL3/SDL_loadso.h>
+#include <SDL3/SDL_version.h>
+#else
 #include <SDL_loadso.h>
 #include <SDL_version.h>
+#endif
 
 // STL
 #include <vector>
@@ -934,7 +939,11 @@ int extloader(lua_State *L)
 		}
 	}
 
+#if SDL_VERSION_ATLEAST(3, 0, 0)
+	SDL_SharedObject *handle = nullptr;
+#else
 	void *handle = nullptr;
+#endif
 	auto *inst = instance();
 
 #ifdef LOVE_ANDROID

@@ -33,7 +33,7 @@ jobs:
       uses: actions/checkout@v4
       with:
         repository: love2d/love-appimage-source
-        ref: 12.x
+        ref: main
     - name: Checkout LÖVE
       uses: actions/checkout@v4
       with:
@@ -304,7 +304,7 @@ jobs:
     - name: Install Mesa 
       if: steps.vars.outputs.arch != 'ARM64'
       run: |
-        curl -L --output mesa.7z --url https://github.com/pal1000/mesa-dist-win/releases/download/23.2.1/mesa3d-23.2.1-release-msvc.7z
+        curl -L --output mesa.7z --url https://github.com/pal1000/mesa-dist-win/releases/download/24.2.4/mesa3d-24.2.4-release-msvc.7z
         7z x mesa.7z -o*
         powershell.exe mesa\systemwidedeploy.cmd 1
     # build love to use for the tests
@@ -427,8 +427,9 @@ jobs:
         repository: love2d/love-apple-dependencies
         ref: main
     - name: Move Dependencies
-      run:
+      run: |
         mv apple-dependencies/macOS/Frameworks platform/xcode/macosx
+        mv apple-dependencies/shared platform/xcode
     - name: Build
       run:
         xcodebuild clean archive -project platform/xcode/love.xcodeproj -scheme love-macosx -configuration Release -destination generic/platform=macOS -archivePath love-macos.xcarchive
@@ -514,6 +515,7 @@ jobs:
     - name: Move Dependencies
       run: |
         mv apple-dependencies/iOS/libraries platform/xcode/ios
+        mv apple-dependencies/shared platform/xcode
     - name: Build
       run:
         xcodebuild -project platform/xcode/love.xcodeproj -scheme love-ios -configuration Release -destination 'platform=iOS Simulator,name=iPhone 15'

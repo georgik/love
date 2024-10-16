@@ -45,7 +45,13 @@
 #include <cstdio>
 
 #ifdef LOVE_IOS
+#if __has_include(<SDL3/SDL_video.h>)
+#include <SDL3/SDL_video.h>
+#include <SDL3/SDL_version.h>
+#else
 #include <SDL_syswm.h>
+#include <SDL_version.h>
+#endif
 #endif
 
 namespace love
@@ -282,6 +288,14 @@ GLuint Graphics::getSystemBackbufferFBO() const
 {
 #ifdef LOVE_IOS
 	// Hack: iOS uses a custom FBO.
+#if SDL_VERSION_ATLEAST(3, 0, 0)
+	SDL_PropertiesID props = SDL_GetWindowProperties(SDL_GL_GetCurrentWindow());
+	GLuint resolveframebuffer = (GLuint)SDL_GetNumberProperty(props, SDL_PROP_WINDOW_UIKIT_OPENGL_RESOLVE_FRAMEBUFFER_NUMBER, 0);
+	if (resolveframebuffer != 0)
+		return resolveframebuffer;
+	else
+		return (GLuint)SDL_GetNumberProperty(props, SDL_PROP_WINDOW_UIKIT_OPENGL_FRAMEBUFFER_NUMBER, 0);
+#else
 	SDL_SysWMinfo info = {};
 	SDL_VERSION(&info.version);
 	SDL_GetWindowWMInfo(SDL_GL_GetCurrentWindow(), &info);
@@ -290,6 +304,7 @@ GLuint Graphics::getSystemBackbufferFBO() const
 		return info.info.uikit.resolveFramebuffer;
 	else
 		return info.info.uikit.framebuffer;
+#endif
 #else
 	return 0;
 #endif
@@ -569,8 +584,11 @@ bool Graphics::dispatch(love::graphics::Shader *s, love::graphics::Buffer *indir
 
 void Graphics::draw(const DrawCommand &cmd)
 {
+	VertexAttributes attributes;
+	findVertexAttributes(cmd.attributesID, attributes);
+
 	gl.prepareDraw(this);
-	gl.setVertexAttributes(*cmd.attributes, *cmd.buffers);
+	gl.setVertexAttributes(attributes, *cmd.buffers);
 	gl.bindTextureToUnit(cmd.texture, 0, false);
 	gl.setCullMode(cmd.cullMode);
 
@@ -591,8 +609,11 @@ void Graphics::draw(const DrawCommand &cmd)
 
 void Graphics::draw(const DrawIndexedCommand &cmd)
 {
+	VertexAttributes attributes;
+	findVertexAttributes(cmd.attributesID, attributes);
+
 	gl.prepareDraw(this);
-	gl.setVertexAttributes(*cmd.attributes, *cmd.buffers);
+	gl.setVertexAttributes(attributes, *cmd.buffers);
 	gl.bindTextureToUnit(cmd.texture, 0, false);
 	gl.setCullMode(cmd.cullMode);
 
@@ -640,10 +661,13 @@ static inline void advanceVertexOffsets(const VertexAttributes &attributes, Buff
 	}
 }
 
-void Graphics::drawQuads(int start, int count, const VertexAttributes &attributes, const BufferBindings &buffers, love::graphics::Texture *texture)
+void Graphics::drawQuads(int start, int count, VertexAttributesID attributesID, const BufferBindings &buffers, love::graphics::Texture *texture)
 {
 	const int MAX_VERTICES_PER_DRAW = LOVE_UINT16_MAX;
 	const int MAX_QUADS_PER_DRAW    = MAX_VERTICES_PER_DRAW / 4;
+
+	VertexAttributes attributes;
+	findVertexAttributes(attributesID, attributes);
 
 	gl.prepareDraw(this);
 	gl.bindTextureToUnit(texture, 0, false);
@@ -1282,10 +1306,16 @@ void Graphics::present(void *screenshotCallbackData)
 
 #ifdef LOVE_IOS
 	// Hack: SDL's color renderbuffer must be bound when swapBuffers is called.
+#if SDL_VERSION_ATLEAST(3, 0, 0)
+	SDL_PropertiesID props = SDL_GetWindowProperties(SDL_GL_GetCurrentWindow());
+	GLuint colorbuffer = (GLuint)SDL_GetNumberProperty(props, SDL_PROP_WINDOW_UIKIT_OPENGL_RENDERBUFFER_NUMBER, 0);
+	glBindRenderbuffer(GL_RENDERBUFFER, colorbuffer);
+#else
 	SDL_SysWMinfo info = {};
 	SDL_VERSION(&info.version);
 	SDL_GetWindowWMInfo(SDL_GL_GetCurrentWindow(), &info);
 	glBindRenderbuffer(GL_RENDERBUFFER, info.info.uikit.colorbuffer);
+#endif
 #endif
 
 	for (StreamBuffer *buffer : batchedDrawState.vb)

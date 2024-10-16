@@ -49,12 +49,14 @@ namespace vulkan
 struct ColorAttachment
 {
 	VkFormat format = VK_FORMAT_UNDEFINED;
+	VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
 	VkAttachmentLoadOp loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
 	VkSampleCountFlagBits msaaSamples = VK_SAMPLE_COUNT_1_BIT;
 
 	bool operator==(const ColorAttachment &attachment) const
 	{
-		return format == attachment.format && 
+		return format == attachment.format &&
+			layout == attachment.layout &&
 			loadOp == attachment.loadOp &&
 			msaaSamples == attachment.msaaSamples;
 	}
@@ -63,6 +65,7 @@ struct ColorAttachment
 struct DepthStencilAttachment
 {
 	VkFormat format = VK_FORMAT_UNDEFINED;
+	VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
 	VkAttachmentLoadOp depthLoadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
 	VkAttachmentLoadOp stencilLoadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
 	VkSampleCountFlagBits msaaSamples = VK_SAMPLE_COUNT_1_BIT;
@@ -70,6 +73,7 @@ struct DepthStencilAttachment
 	bool operator==(const DepthStencilAttachment &attachment) const
 	{
 		return format == attachment.format &&
+			layout == attachment.layout &&
 			depthLoadOp == attachment.depthLoadOp &&
 			stencilLoadOp == attachment.stencilLoadOp &&
 			msaaSamples == attachment.msaaSamples;
@@ -196,7 +200,6 @@ struct RenderpassState
 	RenderPassConfiguration renderPassConfiguration{};
 	FramebufferConfiguration framebufferConfiguration{};
 	VkPipeline pipeline = VK_NULL_HANDLE;
-	std::vector<std::tuple<VkImage, PixelFormat, VkImageLayout, VkImageLayout, int, int>> transitionImages;
 	uint32_t numColorAttachments = 0;
 	uint64 packedColorAttachmentFormats = 0;
 	float width = 0.0f;
@@ -256,7 +259,7 @@ public:
 	RendererInfo getRendererInfo() const override;
 	void draw(const DrawCommand &cmd) override;
 	void draw(const DrawIndexedCommand &cmd) override;
-	void drawQuads(int start, int count, const VertexAttributes &attributes, const BufferBindings &buffers, graphics::Texture *texture) override;
+	void drawQuads(int start, int count, VertexAttributesID attributesID, const BufferBindings &buffers, graphics::Texture *texture) override;
 
 	// internal functions.
 
@@ -267,7 +270,6 @@ public:
 	void addReadbackCallback(std::function<void()> callback);
 	void submitGpuCommands(SubmitMode, void *screenshotCallbackData = nullptr);
 	VkSampler getCachedSampler(const SamplerState &sampler);
-	void setComputeShader(Shader *computeShader);
 	graphics::Shader::BuiltinUniformData getCurrentBuiltinUniformData();
 	const OptionalDeviceExtensions &getEnabledOptionalDeviceExtensions() const;
 	const OptionalInstanceExtensions &getEnabledOptionalInstanceExtensions() const;
@@ -276,7 +278,7 @@ public:
 	int getVsync() const;
 	void mapLocalUniformData(void *data, size_t size, VkDescriptorBufferInfo &bufferInfo);
 
-	VkPipeline createGraphicsPipeline(Shader *shader, const GraphicsPipelineConfiguration &configuration);
+	VkPipeline createGraphicsPipeline(Shader *shader, const GraphicsPipelineConfigurationCore &configuration, const GraphicsPipelineConfigurationNoDynamicState *noDynamicStateConfiguration);
 
 	uint32 getDeviceApiVersion() const { return deviceApiVersion; }
 
@@ -332,7 +334,7 @@ private:
 		std::vector<VkVertexInputBindingDescription> &bindingDescriptions, 
 		std::vector<VkVertexInputAttributeDescription> &attributeDescriptions);
 	void prepareDraw(
-		const VertexAttributes &attributes,
+		VertexAttributesID attributesID,
 		const BufferBindings &buffers, graphics::Texture *texture,
 		PrimitiveType, CullMode);
 	void setRenderPass(const RenderTargets &rts, int pixelw, int pixelh, bool hasSRGBtexture);
@@ -377,7 +379,6 @@ private:
 	std::unordered_map<uint64, VkSampler> samplers;
 	VkCommandPool commandPool = VK_NULL_HANDLE;
 	std::vector<VkCommandBuffer> commandBuffers;
-	Shader *computeShader = nullptr;
 	std::vector<VkSemaphore> imageAvailableSemaphores;
 	std::vector<VkSemaphore> renderFinishedSemaphores;
 	std::vector<VkFence> inFlightFences;

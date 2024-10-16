@@ -23,8 +23,13 @@
 #include "window/sdl/Window.h"
 
 // SDL
+#if __has_include(<SDL3/SDL_version.h>)
+#include <SDL3/SDL_mouse.h>
+#include <SDL3/SDL_version.h>
+#else
 #include <SDL_mouse.h>
 #include <SDL_version.h>
+#endif
 
 namespace love
 {
@@ -32,6 +37,16 @@ namespace mouse
 {
 namespace sdl
 {
+
+#if SDL_VERSION_ATLEAST(3, 0, 0)
+static SDL_Window *getSDLWindow()
+{
+	auto window = Module::getInstance<window::Window>(Module::M_WINDOW);
+	if (window)
+		return (SDL_Window *) window->getHandle();
+	return nullptr;
+}
+#endif
 
 // SDL reports mouse coordinates in the window coordinate system in OS X, but
 // we want them in pixel coordinates (may be different with high-DPI enabled.)
@@ -248,7 +263,11 @@ bool Mouse::isDown(const std::vector<int> &buttons) const
 			break;
 		}
 
+#if SDL_VERSION_ATLEAST(3, 0, 0)
+		if (buttonstate & SDL_BUTTON_MASK(button))
+#else
 		if (buttonstate & SDL_BUTTON(button))
+#endif
 			return true;
 	}
 
@@ -282,12 +301,26 @@ bool Mouse::isGrabbed() const
 
 bool Mouse::setRelativeMode(bool relative)
 {
+#if SDL_VERSION_ATLEAST(3, 0, 0)
+	SDL_Window *sdlwindow = getSDLWindow();
+	if (sdlwindow == nullptr)
+		return false;
+	return SDL_SetWindowRelativeMouseMode(sdlwindow, relative);
+#else
 	return SDL_SetRelativeMouseMode(relative ? SDL_TRUE : SDL_FALSE) == 0;
+#endif
 }
 
 bool Mouse::getRelativeMode() const
 {
+#if SDL_VERSION_ATLEAST(3, 0, 0)
+	SDL_Window *sdlwindow = getSDLWindow();
+	if (sdlwindow == nullptr)
+		return false;
+	return SDL_GetWindowRelativeMouseMode(sdlwindow);
+#else
 	return SDL_GetRelativeMouseMode() != SDL_FALSE;
+#endif
 }
 
 } // sdl
