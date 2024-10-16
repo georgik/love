@@ -107,65 +107,53 @@ void ImageData::create(int width, int height, PixelFormat format, void *data)
 
 void ImageData::decode(Data *data)
 {
-	FormatHandler *decoder = nullptr;
-	FormatHandler::DecodedImage decodedimage;
+    FormatHandler *decoder = nullptr;
+    FormatHandler::DecodedImage decodedimage;
 
-	auto module = Module::getInstance<Image>(Module::M_IMAGE);
+    auto module = Module::getInstance<Image>(Module::M_IMAGE);
 
-	if (module == nullptr)
-		throw love::Exception("love.image must be loaded in order to decode an ImageData.");
+    if (module == nullptr)
+        throw love::Exception("love.image must be loaded in order to decode an ImageData.");
 
-	for (FormatHandler *handler : module->getFormatHandlers())
-	{
-		if (handler->canDecode(data))
-		{
-			decoder = handler;
-			break;
-		}
-	}
+    for (FormatHandler *handler : module->getFormatHandlers())
+    {
+        if (handler->canDecode(data))
+        {
+            decoder = handler;
+            break;
+        }
+    }
 
-	if (decoder)
-		decodedimage = decoder->decode(data);
+    if (decoder)
+        decodedimage = decoder->decode(data);
 
-	if (decodedimage.data == nullptr)
-	{
-		auto filedata = dynamic_cast<filesystem::FileData *>(data);
+    if (decodedimage.data == nullptr)
+    {
+        // Since we can't check the type, adjust the exception message
+        throw love::Exception("Could not decode data to ImageData: unsupported file format");
+    }
 
-		if (filedata != nullptr)
-		{
-			const std::string &name = filedata->getFilename();
-			throw love::Exception("Could not decode file '%s' to ImageData: unsupported file format", name.c_str());
-		}
-		else
-			throw love::Exception("Could not decode data to ImageData: unsupported encoded format");
-	}
+    // Clean up any old data.
+    if (decodeHandler)
+        decodeHandler->freeRawPixels(this->data);
+    else
+        delete[] this->data;
 
-	if (decodedimage.size != getPixelFormatSliceSize(decodedimage.format, decodedimage.width, decodedimage.height))
-	{
-		decoder->freeRawPixels(decodedimage.data);
-		throw love::Exception("Could not convert image!");
-	}
+    // This throws away some information the decoder could give us, but we
+    // can't really rely on it I think...
+    decodedimage.format = getLinearPixelFormat(decodedimage.format);
 
-	// Clean up any old data.
-	if (decodeHandler)
-		decodeHandler->freeRawPixels(this->data);
-	else
-		delete[] this->data;
+    this->width  = decodedimage.width;
+    this->height = decodedimage.height;
+    this->data   = decodedimage.data;
+    this->format = decodedimage.format;
 
-	// This throws away some information the decoder could give us, but we
-	// can't really rely on it I think...
-	decodedimage.format = getLinearPixelFormat(decodedimage.format);
+    decodeHandler = decoder;
 
-	this->width  = decodedimage.width;
-	this->height = decodedimage.height;
-	this->data   = decodedimage.data;
-	this->format = decodedimage.format;
-
-	decodeHandler = decoder;
-
-	pixelSetFunction = getPixelSetFunction(format);
-	pixelGetFunction = getPixelGetFunction(format);
+    pixelSetFunction = getPixelSetFunction(format);
+    pixelGetFunction = getPixelGetFunction(format);
 }
+
 
 love::filesystem::FileData *ImageData::encode(FormatHandler::EncodedFormat encodedFormat, const char *filename, bool writefile) const
 {

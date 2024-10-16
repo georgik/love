@@ -199,7 +199,7 @@ FormatHandler::DecodedImage EXRHandler::decode(Data *data)
 
 		try
 		{
-			img.data = (unsigned char *) readEXRChannels(img.width, img.height, rgba, 1u);
+			img.data = (unsigned char *) readEXRChannels(img.width, img.height, rgba, static_cast<love::uint32>(1u));
 		}
 		catch (love::Exception &)
 		{
