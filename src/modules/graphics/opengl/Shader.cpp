@@ -71,6 +71,7 @@ void Shader::mapActiveUniforms()
 
 	// Make sure all stored resources have their Volatiles loaded before
 	// the sendTextures/sendBuffers calls below, since they call getHandle().
+#ifndef LOVE_ESP_IDF
 	for (love::graphics::Texture *tex : activeTextures)
 	{
 		if (tex == nullptr)
@@ -88,6 +89,7 @@ void Shader::mapActiveUniforms()
 		if (v != nullptr)
 			v->loadVolatile();
 	}
+#endif
 
 	GLint activeprogram = 0;
 	glGetIntegerv(GL_CURRENT_PROGRAM, &activeprogram);
