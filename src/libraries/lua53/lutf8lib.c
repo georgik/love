@@ -152,7 +152,10 @@ static int codepoint (lua_State *L) {
 /* taken from lobject.c */
 static int utf8esc (char *buff, unsigned long x) {
 	int n = 1;  /* number of bytes put in buffer (backwards) */
-	lua_assert(x <= 0x10FFFF);
+
+    // LOVE_ESP_IDF - temporary workaround, since lua_assert is not reachable
+	// lua_assert(x <= 0x10FFFF);
+
 	if (x < 0x80)  /* ascii? */
 		buff[UTF8BUFFSZ - 1] = (char) x;
 	else {  /* need continuation bytes */

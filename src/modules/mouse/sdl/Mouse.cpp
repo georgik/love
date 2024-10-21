@@ -263,10 +263,14 @@ bool Mouse::isDown(const std::vector<int> &buttons) const
 			break;
 		}
 
+#if defined(LOVE_ESP_IDF)
+return false;
+#else
 #if SDL_VERSION_ATLEAST(3, 0, 0)
 		if (buttonstate & SDL_BUTTON_MASK(button))
 #else
 		if (buttonstate & SDL_BUTTON(button))
+#endif
 #endif
 			return true;
 	}
