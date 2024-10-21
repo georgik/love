@@ -144,13 +144,13 @@ static inline size_t readData(lua_State *L, int components, const char *data)
 template <typename T>
 static inline size_t readSNormData(lua_State *L, int components, const char *data)
 {
-	const auto componentdata = (const T *) data;
-	constexpr auto maxval = std::numeric_limits<T>::max();
+    const auto componentdata = (const T *) data;
+    constexpr auto maxval = std::numeric_limits<T>::max();
 
-	for (int i = 0; i < components; i++)
-		lua_pushnumber(L, std::max(-1.0, (lua_Number) componentdata[i] / (lua_Number)maxval));
+    for (int i = 0; i < components; i++)
+        lua_pushnumber(L, std::max((lua_Number)(-1.0), (lua_Number) componentdata[i] / (lua_Number)maxval));
 
-	return sizeof(T) * components;
+    return sizeof(T) * components;
 }
 
 template <typename T>

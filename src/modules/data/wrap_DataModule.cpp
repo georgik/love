@@ -54,20 +54,31 @@ ContainerType luax_checkcontainertype(lua_State *L, int idx)
 
 int w_newDataView(lua_State *L)
 {
-	Data *data = luax_checkdata(L, 1);
+    Data *data = luax_checkdata(L, 1);
 
-	lua_Integer offset = luaL_checkinteger(L, 2);
-	lua_Integer size = luaL_optinteger(L, 3, data->getSize() - offset);
+    lua_Integer offset = luaL_checkinteger(L, 2);
+    lua_Integer size = luaL_optinteger(L, 3, data->getSize() - offset);
 
-	if (offset < 0 || size < 0)
-		return luaL_error(L, "DataView offset and size must not be negative.");
+    if (offset < 0 || size < 0)
+        return luaL_error(L, "DataView offset and size must not be negative.");
 
-	DataView *d;
-	luax_catchexcept(L, [&]() { d = instance()->newDataView(data, (size_t) offset, (size_t) size); });
-	luax_pushtype(L, d);
-	d->release();
+    DataView *d = nullptr; // Initialize d to nullptr
 
-	return 1;
+    luax_catchexcept(L, [&]() { d = instance()->newDataView(data, (size_t) offset, (size_t) size); });
+
+    if (d != nullptr)
+    {
+        luax_pushtype(L, d);
+        d->release();
+    }
+    else
+    {
+        // Handle the case where d is nullptr, if necessary
+        // For example, you might return an error or push nil onto the Lua stack
+        return luaL_error(L, "Failed to create DataView.");
+    }
+
+    return 1;
 }
 
 int w_newByteData(lua_State *L)

@@ -204,23 +204,35 @@ inline float luax_checkfloat(lua_State *L, int idx)
 
 inline lua_Number luax_checknumberclamped(lua_State *L, int idx, double minv, double maxv)
 {
-	return std::min(std::max(luaL_checknumber(L, idx), minv), maxv);
+    double value = static_cast<double>(luaL_checknumber(L, idx));
+    double clamped_value = std::min(std::max(value, minv), maxv);
+    return static_cast<lua_Number>(clamped_value);
 }
+
 
 inline lua_Number luax_optnumberclamped(lua_State *L, int idx, double minv, double maxv, double def)
 {
-	return std::min(std::max(luaL_optnumber(L, idx, def), minv), maxv);
+    double value = static_cast<double>(luaL_optnumber(L, idx, def));
+    double clamped_value = std::min(std::max(value, minv), maxv);
+    return static_cast<lua_Number>(clamped_value);
 }
+
 
 inline lua_Number luax_checknumberclamped01(lua_State *L, int idx)
 {
-	return std::min(std::max(luaL_checknumber(L, idx), 0.0), 1.0);
+    lua_Number value = luaL_checknumber(L, idx);
+    lua_Number clamped_value = std::min(std::max(value, lua_Number(0.0)), lua_Number(1.0));
+    return clamped_value;
 }
+
 
 inline lua_Number luax_optnumberclamped01(lua_State *L, int idx, double def)
 {
-	return std::min(std::max(luaL_optnumber(L, idx, def), 0.0), 1.0);
+    lua_Number value = luaL_optnumber(L, idx, def);
+    lua_Number clamped_value = std::min(std::max(value, lua_Number(0.0)), lua_Number(1.0));
+    return clamped_value;
 }
+
 
 /**
  * Require at least 'min' number of items on the stack.

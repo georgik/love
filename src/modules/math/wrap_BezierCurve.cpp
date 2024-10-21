@@ -159,17 +159,26 @@ int w_BezierCurve_evaluate(lua_State *L)
 
 int w_BezierCurve_getSegment(lua_State *L)
 {
-	BezierCurve *curve = luax_checkbeziercurve(L, 1);
-	double t1 = luaL_checknumber(L, 2);
-	double t2 = luaL_checknumber(L, 3);
+    BezierCurve *curve = luax_checkbeziercurve(L, 1);
+    double t1 = luaL_checknumber(L, 2);
+    double t2 = luaL_checknumber(L, 3);
 
-	BezierCurve *segment;
-	luax_catchexcept(L, [&](){ segment = curve->getSegment(t1, t2); });
-	luax_pushtype(L, segment);
-	segment->release();
+    BezierCurve *segment = nullptr; // Initialize segment to nullptr
 
-	return 1;
+    luax_catchexcept(L, [&]()
+    {
+        segment = curve->getSegment(t1, t2);
+    });
+
+    if (segment != nullptr)
+    {
+        luax_pushtype(L, segment);
+        segment->release();
+    }
+
+    return 1;
 }
+
 
 int w_BezierCurve_render(lua_State *L)
 {

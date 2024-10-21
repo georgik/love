@@ -103,7 +103,7 @@ double Timer::getAverageDelta() const
 	return averageDelta;
 }
 
-#if defined(LOVE_LINUX)
+#if defined(LOVE_LINUX) || defined(LOVE_ESP_IDF)
 
 static inline timespec getTimeOfDay()
 {

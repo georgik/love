@@ -115,6 +115,27 @@ public:
 
 private:
 
+#if defined(LOVE_ESP_IDF)
+struct CachedFBOHasher
+{
+    size_t operator() (const RenderTargets &rts) const
+    {
+        RenderTarget hashtargets[MAX_COLOR_RENDER_TARGETS + 1];
+        int hashcount = 0;
+
+        for (size_t i = 0; i < rts.colors.size(); i++)
+            hashtargets[hashcount++] = rts.colors[i];
+
+        if (rts.depthStencil.texture != nullptr)
+            hashtargets[hashcount++] = rts.depthStencil;
+        else if (rts.temporaryRTFlags != 0)
+            hashtargets[hashcount++] = RenderTarget(nullptr, -1, rts.temporaryRTFlags);
+
+        // Dummy hash using std::hash, returns a constant value for simplicity
+        return std::hash<int>{}(0);  // You can return any constant or dummy value here
+    }
+};
+#else
 	struct CachedFBOHasher
 	{
 		size_t operator() (const RenderTargets &rts) const
@@ -133,6 +154,7 @@ private:
 			return XXH32(hashtargets, sizeof(RenderTarget) * hashcount, 0);
 		}
 	};
+#endif
 
 	love::graphics::ShaderStage *newShaderStageInternal(ShaderStageType stage, const std::string &cachekey, const std::string &source, bool gles) override;
 	love::graphics::Shader *newShaderInternal(StrongRef<love::graphics::ShaderStage> stages[SHADERSTAGE_MAX_ENUM], const Shader::CompileOptions &options) override;

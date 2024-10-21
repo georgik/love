@@ -266,7 +266,10 @@ const Font::Glyph &Font::addGlyph(love::font::TextShaper::GlyphIndex glyphindex)
 	Glyph g;
 
 	g.texture = nullptr;
-	memset(g.vertices, 0, sizeof(GlyphVertex) * 4);
+    for (int i = 0; i < 4; ++i)
+    {
+        g.vertices[i] = GlyphVertex(); // Uses the default constructor
+    }
 
 	// Don't waste space for empty glyphs.
 	if (w > 0 && h > 0)

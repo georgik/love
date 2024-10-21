@@ -163,10 +163,10 @@ int w_ImageData_mapPixel(lua_State *L)
 	ImageData *t = luax_checkimagedata(L, 1);
 	luaL_checktype(L, 2, LUA_TFUNCTION);
 
-	int sx = luaL_optint(L, 3, 0);
-	int sy = luaL_optint(L, 4, 0);
-	int w  = luaL_optint(L, 5, t->getWidth());
-	int h  = luaL_optint(L, 6, t->getHeight());
+	int sx = luaL_optinteger(L, 3, 0);
+	int sy = luaL_optinteger(L, 4, 0);
+	int w  = luaL_optinteger(L, 5, t->getWidth());
+	int h  = luaL_optinteger(L, 6, t->getHeight());
 
 	if (!(t->inside(sx, sy) && t->inside(sx+w-1, sy+h-1)))
 		return luaL_error(L, "Invalid rectangle dimensions.");

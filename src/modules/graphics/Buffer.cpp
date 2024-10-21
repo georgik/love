@@ -344,6 +344,11 @@ std::vector<Buffer::DataDeclaration> Buffer::getCommonFormatDeclaration(CommonFo
 			{ getConstant(ATTRIB_TEXCOORD), DATAFORMAT_FLOAT_VEC2, 0, ATTRIB_TEXCOORD },
 			{ getConstant(ATTRIB_COLOR), DATAFORMAT_UNORM8_VEC4, 0, ATTRIB_COLOR },
 		};
+    case CommonFormat::COUNT:
+        // Handle the COUNT case appropriately
+        // Since COUNT is typically used as a sentinel value, you can return an empty vector or throw an exception
+        return {};
+
 	}
 
 	return {};

@@ -220,6 +220,8 @@ std::string Filesystem::getExecutablePath() const
 
 	return std::string(buffer, len);
 
+#elif defined(LOVE_ESP_IDF)
+    return "";
 #else
 #error Missing implementation for Filesystem::getExecutablePath!
 #endif

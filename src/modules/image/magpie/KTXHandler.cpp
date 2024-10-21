@@ -307,7 +307,7 @@ StrongRef<ByteData> KTXHandler::parseCompressed(Data *filedata, std::vector<Stro
 			headerArray[i] = swapuint32(headerArray[i]);
 	}
 
-	header.numberOfMipmapLevels = std::max(header.numberOfMipmapLevels, 1u);
+	header.numberOfMipmapLevels = std::max(header.numberOfMipmapLevels, static_cast<love::uint32>(1));
 
 	PixelFormat cformat = convertFormat(header.glInternalFormat);
 
@@ -366,8 +366,8 @@ StrongRef<ByteData> KTXHandler::parseCompressed(Data *filedata, std::vector<Stro
 
 		uint32 mipsizepadded = (mipsize + 3) & ~uint32(3);
 
-		int width = (int) std::max(header.pixelWidth >> i, 1u);
-		int height = (int) std::max(header.pixelHeight >> i, 1u);
+        int width = (int) std::max(header.pixelWidth >> i, static_cast<love::uint32>(1));
+        int height = (int) std::max(header.pixelHeight >> i, static_cast<love::uint32>(1));
 
 		memcpy((uint8 *) memory->getData() + dataoffset, filebytes + fileoffset, mipsize);
 

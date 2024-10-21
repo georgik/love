@@ -685,6 +685,8 @@ int w_getStencilState(lua_State *L)
 
 static void parseDPIScale(Data *d, float *dpiscale)
 {
+#ifdef LOVE_ESP_IDF
+#else
 	auto fd = dynamic_cast<love::filesystem::FileData *>(d);
 	if (fd == nullptr)
 		return;
@@ -703,6 +705,7 @@ static void parseDPIScale(Data *d, float *dpiscale)
 		if (end != nullptr && density > 0 && dpiscale != nullptr)
 			*dpiscale = (float) density;
 	}
+#endif
 }
 
 static std::pair<StrongRef<image::ImageData>, StrongRef<image::CompressedImageData>>
@@ -1295,22 +1298,22 @@ int w_newTextureView(lua_State *L)
 
 	lua_getfield(L, 2, "mipmapstart");
 	if (!lua_isnoneornil(L, -1))
-		settings.mipmapStart.set(luaL_checkint(L, -1) - 1);
+		settings.mipmapStart.set(luaL_checkinteger(L, -1) - 1);
 	lua_pop(L, 1);
 
 	lua_getfield(L, 2, "mipmapcount");
 	if (!lua_isnoneornil(L, -1))
-		settings.mipmapCount.set(luaL_checkint(L, -1));
+		settings.mipmapCount.set(luaL_checkinteger(L, -1));
 	lua_pop(L, 1);
 
 	lua_getfield(L, 2, "layerstart");
 	if (!lua_isnoneornil(L, -1))
-		settings.layerStart.set(luaL_checkint(L, -1) - 1);
+		settings.layerStart.set(luaL_checkinteger(L, -1) - 1);
 	lua_pop(L, 1);
 
 	lua_getfield(L, 2, "layers");
 	if (!lua_isnoneornil(L, -1))
-		settings.layerCount.set(luaL_checkint(L, -1));
+		settings.layerCount.set(luaL_checkinteger(L, -1));
 	lua_pop(L, 1);
 
 	lua_getfield(L, 2, "debugname");
@@ -1765,7 +1768,7 @@ static Buffer::DataDeclaration luax_checkdatadeclaration(lua_State* L, int forma
 		luaL_argerror(L, formattableidx, str.c_str());
 	}
 	else if (!lua_isnoneornil(L, -1))
-		decl.bindingLocation = luaL_checkint(L, -1);
+		decl.bindingLocation = luaL_checkinteger(L, -1);
 	lua_pop(L, 1);
 
 	return decl;
@@ -2209,7 +2212,7 @@ static Mesh::BufferAttribute luax_checkbufferattributetable(lua_State *L, int id
 	lua_pop(L, 1);
 
 	lua_getfield(L, idx, "location");
-	attrib.bindingLocation = luaL_checkint(L, -1);
+	attrib.bindingLocation = luaL_checkinteger(L, -1);
 	lua_pop(L, 1);
 
 	lua_getfield(L, idx, "name");
@@ -2228,7 +2231,7 @@ static Mesh::BufferAttribute luax_checkbufferattributetable(lua_State *L, int id
 
 	lua_getfield(L, idx, "locationinbuffer");
 	if (!lua_isnoneornil(L, -1))
-		attrib.bindingLocationInBuffer = luaL_checkint(L, -1);
+		attrib.bindingLocationInBuffer = luaL_checkinteger(L, -1);
 	else
 		attrib.bindingLocationInBuffer = attrib.bindingLocation;
 	lua_pop(L, 1);
